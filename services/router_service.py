@@ -1,3 +1,4 @@
+import os
 import time
 import json
 import sqlite3
@@ -24,14 +25,14 @@ def get_auth_token():
         print(f"Error generating token: {e}")
         return None
 
-def fetch_9router_stats():
+def fetch_9router_stats(period="today"):
     token = get_auth_token()
     headers = {"Authorization": f"Bearer {token}"}
     cookies = {"auth_token": token}
     
     api_stats = {}
     try:
-        r = requests.get(f"{BASE_URL}/api/usage/stats?period=today", headers=headers, cookies=cookies, timeout=5)
+        r = requests.get(f"{BASE_URL}/api/usage/stats?period={period}", headers=headers, cookies=cookies, timeout=5)
         if r.status_code == 200:
             api_stats = r.json()
     except Exception as e:
@@ -71,7 +72,7 @@ def fetch_9router_stats():
         if row:
             daily_db = json.loads(row[1])
             
-        c.execute("SELECT timestamp, provider, model, connectionId, promptTokens, completionTokens, cost, status FROM usageHistory ORDER BY id DESC LIMIT 5")
+        c.execute("SELECT timestamp, provider, model, connectionId, promptTokens, completionTokens, cost, status FROM usageHistory ORDER BY id DESC LIMIT 6")
         for r in c.fetchall():
             recent_logs.append({
                 "time": r[0][11:19] if r[0] and len(r[0]) >= 19 else r[0],
@@ -95,12 +96,48 @@ def fetch_9router_stats():
         print(f"DB fetch error: {e}")
         
     return {
+        "period": period,
         "api": api_stats,
         "accounts": accounts,
         "daily": daily_db,
         "recent": recent_logs,
         "settings": settings_db
     }
+
+def toggle_token_saver_feature(feature_key):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("SELECT data FROM settings WHERE id = 1")
+        row = c.fetchone()
+        data = json.loads(row[0]) if row else {}
+        
+        if feature_key == "caveman":
+            cur = data.get("cavemanEnabled", False)
+            data["cavemanEnabled"] = not cur
+            if not cur and "cavemanLevel" not in data:
+                data["cavemanLevel"] = "full"
+            state_str = "🟢 AKTIF (Full)" if data["cavemanEnabled"] else "🔴 NONAKTIF"
+            msg = f"Caveman (LLM Output Compressor): {state_str}"
+            
+        elif feature_key == "caveman_level":
+            cur_lvl = data.get("cavemanLevel", "full")
+            new_lvl = "lite" if cur_lvl == "full" else "full"
+            data["cavemanLevel"] = new_lvl
+            msg = f"Caveman Level diset ke: <b>{new_lvl.upper()}</b>"
+            
+        elif feature_key == "ponytail":
+            cur = data.get("ponytailEnabled", False)
+            data["ponytailEnabled"] = not cur
+            state_str = "🟢 AKTIF" if data["ponytailEnabled"] else "🔴 NONAKTIF"
+            msg = f"Ponytail (Lazy Senior Dev Code Filter): {state_str}"
+            
+        c.execute("UPDATE settings SET data = ? WHERE id = 1", (json.dumps(data),))
+        conn.commit()
+        conn.close()
+        return True, msg
+    except Exception as e:
+        return False, str(e)
 
 def fetch_available_models_catalog(provider_filter="antigravity"):
     token = get_auth_token()

@@ -5,6 +5,7 @@ def format_quota_report(data):
     daily = data.get("daily", {})
     accounts = data.get("accounts", [])
     settings = data.get("settings", {})
+    period = data.get("period", "today").upper()
     
     total_req = api.get("totalRequests") or daily.get("requests") or 0
     prompt_tokens = (api.get("totalPromptTokens") or daily.get("promptTokens") or 0) / 1_000_000
@@ -13,35 +14,57 @@ def format_quota_report(data):
     cost = api.get("totalCost") or daily.get("cost") or 0.0
     
     rr_limit = settings.get("stickyRoundRobinLimit", 3)
+    caveman_on = settings.get("cavemanEnabled", False)
+    ponytail_on = settings.get("ponytailEnabled", False)
     
     cache_pct = (cached_tokens / prompt_tokens * 100) if prompt_tokens > 0 else 0
-    bar_len = 14
+    bar_len = 12
     filled = int(bar_len * (cache_pct / 100))
     bar = "▓" * filled + "░" * (bar_len - filled)
     
-    text = "⚡ <b>9ROUTER INFRASTRUCTURE DASHBOARD</b> ⚡\n"
-    text += f"<code>System Time : {time.strftime('%Y-%m-%d %H:%M:%S')} UTC</code>\n"
-    text += f"<code>Load Balancer: Round-Robin ({rr_limit}x sticky limit)</code>\n\n"
+    text = f"⚡ <b>9ROUTER INFRASTRUCTURE HUB</b> ⚡\n"
+    text += f"<code>Timeframe : {period} ({time.strftime('%H:%M:%S')} UTC)</code>\n"
+    text += f"<code>Balancer  : Round-Robin ({rr_limit}x sticky limit)</code>\n\n"
     
     text += "┌─────────────────────────────────────┐\n"
-    text += f"│ 🚀 <b>24-HOUR USAGE SUMMARY</b>\n"
+    text += f"│ 🚀 <b>TELEMETRY USAGE ({period})</b>\n"
     text += "├─────────────────────────────────────┤\n"
     text += f"│ • Total Requests : <b>{total_req:,}x</b>\n"
     text += f"│ • Prompt Ingest  : <b>{prompt_tokens:.2f} M</b>\n"
-    text += f"│ • Prompt Cached  : <b>{cached_tokens:.2f} M ({cache_pct:.1f}%)</b> ⚡\n"
+    text += f"│ • Cached (Free)  : <b>{cached_tokens:.2f} M ({cache_pct:.1f}%)</b> ⚡\n"
     text += f"│ • Completion Out : <b>{comp_tokens:.2f} K</b>\n"
     text += f"│ • Incurred Cost  : <b>${cost:.4f}</b>\n"
     text += "└─────────────────────────────────────┘\n\n"
     
-    text += f"📈 <b>Cache Efficiency</b>: [{bar}] <b>{cache_pct:.1f}%</b>\n\n"
+    text += f"📈 <b>Cache Savings</b>: [{bar}] <b>{cache_pct:.1f}%</b>\n"
+    text += f"🛡️ <b>Token Saver</b>: Caveman {'🟢' if caveman_on else '🔴'} • Ponytail {'🟢' if ponytail_on else '🔴'}\n\n"
     
-    text += "👥 <b>Active Accounts & Connections</b>\n"
+    text += "👥 <b>Active Connections Pool:</b>\n"
     for idx, acc in enumerate(accounts, 1):
         status_dot = "🟢" if acc["active"] else "🔴"
         last_used = acc["lastUsedAt"][11:19] if acc.get("lastUsedAt") else "Never"
         text += f"{idx}. {status_dot} <b>[{acc['provider'].upper()}]</b> <code>{acc['email']}</code>\n"
-        text += f"   └ Status: <b>{'Active' if acc['active'] else 'Disabled'}</b> • Last Used: <code>{last_used}</code>\n"
         
+    return text
+
+def format_token_saver_dashboard(settings):
+    caveman_on = settings.get("cavemanEnabled", False)
+    caveman_lvl = settings.get("cavemanLevel", "full")
+    ponytail_on = settings.get("ponytailEnabled", False)
+    
+    text = "🛡️ <b>9ROUTER TOKEN SAVER & COMPRESSION HUB</b> 🛡️\n\n"
+    text += "Konfigurasi kompresi prompt & output untuk menghemat token dan cost kuota:\n\n"
+    
+    text += "1. <b>Compress LLM Output (Caveman)</b>:\n"
+    text += f"   • Status: <b>{'🟢 AKTIF' if caveman_on else '🔴 NONAKTIF'}</b>\n"
+    text += f"   • Mode  : <code>{caveman_lvl.upper()}</code>\n"
+    text += "   └ <i>Menghapus filler/basa-basi AI, respon lebih padat & hemat token.</i>\n\n"
+    
+    text += "2. <b>Lazy Senior Dev Code Filter (Ponytail)</b>:\n"
+    text += f"   • Status: <b>{'🟢 AKTIF' if ponytail_on else '🔴 NONAKTIF'}</b>\n"
+    text += "   └ <i>Menulis kode minimalis, menghapus boilerplate/scaffolding berlebih.</i>\n\n"
+    
+    text += "<i>Klik tombol di bawah untuk toggle ON/OFF fitur secara realtime:</i>"
     return text
 
 def format_account_detailed_quota(data, target_email=None):
@@ -88,7 +111,7 @@ def format_account_detailed_quota(data, target_email=None):
             comp_k = acc_info["completionTokens"] / 1_000
             c_pct = (c_m / p_m * 100) if p_m > 0 else 0
             
-            text += f"📊 <b>Token Statistics (24H):</b>\n"
+            text += f"📊 <b>Token Statistics:</b>\n"
             text += f" • Requests Count  : <b>{acc_info['requests']:,}x</b>\n"
             text += f" • Prompt Ingested : <b>{p_m:.2f} M</b>\n"
             text += f" • Cached Tokens   : <b>{c_m:.2f} M ({c_pct:.1f}%)</b> ⚡\n"

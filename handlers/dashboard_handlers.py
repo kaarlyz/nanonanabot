@@ -1,6 +1,6 @@
 import os
 import requests
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
 from telegram.error import BadRequest
 from telegram.ext import ContextTypes, ConversationHandler
 
@@ -16,6 +16,7 @@ from services.router_service import (
     set_opencode_main_model_file,
     add_opencode_model_file,
     delete_opencode_model_file,
+    toggle_token_saver_feature,
     get_auth_token,
 )
 from utils.formatter import (
@@ -23,31 +24,39 @@ from utils.formatter import (
     format_recent_logs,
     format_models_breakdown,
     format_account_detailed_quota,
+    format_token_saver_dashboard,
 )
-from core.keyboards import get_main_menu_keyboard, get_back_button
+from core.keyboards import get_main_menu_keyboard, get_token_saver_keyboard, get_back_button
 from config.settings import BASE_URL, BANNER_IMAGE_PATH
 
 ADD_NAME, ADD_KEY, ADD_URL, ADD_OAUTH_CALLBACK = range(4)
 
-async def safe_edit_message(query, text, reply_markup):
+async def safe_edit_view(query, text, reply_markup):
     try:
-        if query.message.caption:
+        # If the existing message is a photo with caption
+        if query.message.photo:
             await query.edit_message_caption(caption=text, parse_mode="HTML", reply_markup=reply_markup)
-        else:
-            await query.edit_message_text(text=text, parse_mode="HTML", reply_markup=reply_markup)
+            return
+    except Exception as e:
+        pass
+        
+    try:
+        # Otherwise edit message text or re-send
+        await query.edit_message_text(text=text, parse_mode="HTML", reply_markup=reply_markup)
     except BadRequest as e:
         if "Message is not modified" in str(e):
             pass
         else:
-            try:
-                await query.edit_message_text(text=text, parse_mode="HTML", reply_markup=reply_markup)
-            except:
-                pass
+            # If editing across text/photo modes fails, send as clean photo reply
+            if os.path.exists(BANNER_IMAGE_PATH):
+                with open(BANNER_IMAGE_PATH, "rb") as photo:
+                    await query.message.reply_photo(photo=photo, caption=text, parse_mode="HTML", reply_markup=reply_markup)
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    data = fetch_9router_stats()
+    period = context.user_data.get("period", "today")
+    data = fetch_9router_stats(period)
     text = format_quota_report(data)
-    reply_markup = get_main_menu_keyboard()
+    reply_markup = get_main_menu_keyboard(period)
     
     if update.message:
         if os.path.exists(BANNER_IMAGE_PATH):
@@ -61,17 +70,47 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_html(text, reply_markup=reply_markup)
     elif update.callback_query:
-        await safe_edit_message(update.callback_query, text, reply_markup)
+        await safe_edit_view(update.callback_query, text, reply_markup)
 
 async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
-    data = fetch_9router_stats()
+    cur_period = context.user_data.get("period", "today")
     
-    if query.data in ["refresh_quota", "view_quota"]:
+    if query.data.startswith("period_"):
+        new_period = query.data.replace("period_", "")
+        context.user_data["period"] = new_period
+        data = fetch_9router_stats(new_period)
         text = format_quota_report(data)
-        await safe_edit_message(query, text, get_main_menu_keyboard())
+        await safe_edit_view(query, text, get_main_menu_keyboard(new_period))
+        return
+        
+    data = fetch_9router_stats(cur_period)
+    
+    if query.data in ["refresh_quota", "view_quota", f"refresh_{cur_period}"]:
+        text = format_quota_report(data)
+        await safe_edit_view(query, text, get_main_menu_keyboard(cur_period))
+        
+    elif query.data == "token_saver_menu":
+        settings = data.get("settings", {})
+        text = format_token_saver_dashboard(settings)
+        await safe_edit_view(query, text, get_token_saver_keyboard(settings))
+        
+    elif query.data.startswith("ts_toggle_"):
+        feat = query.data.replace("ts_toggle_", "")
+        if feat == "caveman":
+            ok, msg = toggle_token_saver_feature("caveman")
+        elif feat == "level":
+            ok, msg = toggle_token_saver_feature("caveman_level")
+        elif feat == "ponytail":
+            ok, msg = toggle_token_saver_feature("ponytail")
+        await query.answer(msg)
+        
+        data = fetch_9router_stats(cur_period)
+        settings = data.get("settings", {})
+        text = format_token_saver_dashboard(settings)
+        await safe_edit_view(query, text, get_token_saver_keyboard(settings))
         
     elif query.data == "view_logs":
         text = format_recent_logs(data)
@@ -81,7 +120,7 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
                 InlineKeyboardButton("⬅️ Return to Dashboard", callback_data="view_quota")
             ]
         ]
-        await safe_edit_message(query, text, InlineKeyboardMarkup(keyboard))
+        await safe_edit_view(query, text, InlineKeyboardMarkup(keyboard))
         
     elif query.data == "view_models":
         text = format_models_breakdown(data)
@@ -91,7 +130,7 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
                 InlineKeyboardButton("⬅️ Return to Dashboard", callback_data="view_quota")
             ]
         ]
-        await safe_edit_message(query, text, InlineKeyboardMarkup(keyboard))
+        await safe_edit_view(query, text, InlineKeyboardMarkup(keyboard))
         
     elif query.data == "detailed_quota_menu":
         accounts = data.get("accounts", [])
@@ -104,7 +143,7 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
             keyboard.append([InlineKeyboardButton(label, callback_data=f"show_acc_quota_{acc['email']}")])
             
         keyboard.append([InlineKeyboardButton("⬅️ Return to Dashboard", callback_data="view_quota")])
-        await safe_edit_message(query, text, InlineKeyboardMarkup(keyboard))
+        await safe_edit_view(query, text, InlineKeyboardMarkup(keyboard))
         
     elif query.data.startswith("show_acc_quota_"):
         email = query.data.replace("show_acc_quota_", "")
@@ -114,7 +153,7 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
             [InlineKeyboardButton("⬅️ Select Another Account", callback_data="detailed_quota_menu")],
             [InlineKeyboardButton("🏠 Main Dashboard", callback_data="view_quota")]
         ]
-        await safe_edit_message(query, text, InlineKeyboardMarkup(keyboard))
+        await safe_edit_view(query, text, InlineKeyboardMarkup(keyboard))
         
     elif query.data == "manage_accounts":
         accounts = data.get("accounts", [])
@@ -128,7 +167,7 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
             keyboard.append([InlineKeyboardButton(label, callback_data=f"acc_detail_{acc['id']}")])
             
         keyboard.append([InlineKeyboardButton("⬅️ Return to Dashboard", callback_data="view_quota")])
-        await safe_edit_message(query, text, InlineKeyboardMarkup(keyboard))
+        await safe_edit_view(query, text, InlineKeyboardMarkup(keyboard))
         
     elif query.data.startswith("acc_detail_"):
         acc_id = query.data.replace("acc_detail_", "")
@@ -154,14 +193,14 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
             [InlineKeyboardButton("🗑️ Delete Account", callback_data=f"del_confirm_{acc['id']}")],
             [InlineKeyboardButton("⬅️ Back to Accounts", callback_data="manage_accounts")]
         ]
-        await safe_edit_message(query, text, InlineKeyboardMarkup(keyboard))
+        await safe_edit_view(query, text, InlineKeyboardMarkup(keyboard))
         
     elif query.data.startswith("toggle_"):
         acc_id = query.data.replace("toggle_", "")
         ok, msg = toggle_account_db(acc_id)
         await query.answer(msg)
         
-        data = fetch_9router_stats()
+        data = fetch_9router_stats(cur_period)
         accounts = data.get("accounts", [])
         acc = next((a for a in accounts if a["id"] == acc_id), None)
         if acc:
@@ -177,7 +216,7 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
                 [InlineKeyboardButton("🗑️ Delete Account", callback_data=f"del_confirm_{acc['id']}")],
                 [InlineKeyboardButton("⬅️ Back to Accounts", callback_data="manage_accounts")]
             ]
-            await safe_edit_message(query, text, InlineKeyboardMarkup(keyboard))
+            await safe_edit_view(query, text, InlineKeyboardMarkup(keyboard))
             
     elif query.data.startswith("del_confirm_"):
         acc_id = query.data.replace("del_confirm_", "")
@@ -193,7 +232,7 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
             [InlineKeyboardButton("🔥 Confirm Delete", callback_data=f"del_do_{acc_id}")],
             [InlineKeyboardButton("❌ Cancel", callback_data=f"acc_detail_{acc_id}")]
         ]
-        await safe_edit_message(query, text, InlineKeyboardMarkup(keyboard))
+        await safe_edit_view(query, text, InlineKeyboardMarkup(keyboard))
         
     elif query.data.startswith("del_do_"):
         acc_id = query.data.replace("del_do_", "")
@@ -202,7 +241,7 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
         
         text = f"{msg}\n\nUse /quota to return to dashboard."
         keyboard = [[InlineKeyboardButton("⬅️ Back to Accounts", callback_data="manage_accounts")]]
-        await safe_edit_message(query, text, InlineKeyboardMarkup(keyboard))
+        await safe_edit_view(query, text, InlineKeyboardMarkup(keyboard))
         
     elif query.data == "rr_menu":
         settings = data.get("settings", {})
@@ -225,7 +264,7 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
             ],
             [InlineKeyboardButton("⬅️ Return to Dashboard", callback_data="view_quota")]
         ]
-        await safe_edit_message(query, text, InlineKeyboardMarkup(keyboard))
+        await safe_edit_view(query, text, InlineKeyboardMarkup(keyboard))
         
     elif query.data.startswith("set_rr_"):
         val = int(query.data.replace("set_rr_", ""))
@@ -243,7 +282,7 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
             ],
             [InlineKeyboardButton("⬅️ Return to Dashboard", callback_data="view_quota")]
         ]
-        await safe_edit_message(query, text, InlineKeyboardMarkup(keyboard))
+        await safe_edit_view(query, text, InlineKeyboardMarkup(keyboard))
         
     elif query.data == "cli_tools_menu":
         opencode_info = get_opencode_config_details()
@@ -265,7 +304,7 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
             [InlineKeyboardButton("🗑️ Remove Configured Model", callback_data="opencode_del_list")],
             [InlineKeyboardButton("⬅️ Return to Dashboard", callback_data="view_quota")]
         ]
-        await safe_edit_message(query, text, InlineKeyboardMarkup(keyboard))
+        await safe_edit_view(query, text, InlineKeyboardMarkup(keyboard))
         
     elif query.data == "opencode_set_main_menu":
         opencode_info = get_opencode_config_details()
@@ -283,7 +322,7 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
             keyboard.append([InlineKeyboardButton(f"{tag}{m}", callback_data=f"set_opencode_main_{m[:30]}")])
             
         keyboard.append([InlineKeyboardButton("⬅️ Back to CLI Tools", callback_data="cli_tools_menu")])
-        await safe_edit_message(query, text, InlineKeyboardMarkup(keyboard))
+        await safe_edit_view(query, text, InlineKeyboardMarkup(keyboard))
         
     elif query.data.startswith("set_opencode_main_"):
         target_short = query.data.replace("set_opencode_main_", "")
@@ -298,7 +337,7 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
             [InlineKeyboardButton("💻 Return to Opencode Manager", callback_data="cli_tools_menu")],
             [InlineKeyboardButton("🏠 Main Dashboard", callback_data="view_quota")]
         ]
-        await safe_edit_message(query, text, InlineKeyboardMarkup(keyboard))
+        await safe_edit_view(query, text, InlineKeyboardMarkup(keyboard))
         
     elif query.data.startswith("pick_catalog_models_"):
         page = int(query.data.replace("pick_catalog_models_", ""))
@@ -328,7 +367,7 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
         if nav_row:
             keyboard.append(nav_row)
         keyboard.append([InlineKeyboardButton("⬅️ Back to CLI Tools", callback_data="cli_tools_menu")])
-        await safe_edit_message(query, text, InlineKeyboardMarkup(keyboard))
+        await safe_edit_view(query, text, InlineKeyboardMarkup(keyboard))
         
     elif query.data.startswith("btn_add_model_"):
         model_to_add = query.data.replace("btn_add_model_", "")
@@ -352,7 +391,7 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
         if total_pages > 1:
             keyboard.append([InlineKeyboardButton("Next ➡️", callback_data="pick_catalog_models_1")])
         keyboard.append([InlineKeyboardButton("⬅️ Back to CLI Tools", callback_data="cli_tools_menu")])
-        await safe_edit_message(query, text, InlineKeyboardMarkup(keyboard))
+        await safe_edit_view(query, text, InlineKeyboardMarkup(keyboard))
         
     elif query.data == "opencode_del_list":
         models = get_opencode_config_details()["models"]
@@ -361,7 +400,7 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
         for m in models:
             keyboard.append([InlineKeyboardButton(f"❌ {m}", callback_data=f"del_opencode_{m[:30]}")])
         keyboard.append([InlineKeyboardButton("⬅️ Back", callback_data="cli_tools_menu")])
-        await safe_edit_message(query, text, InlineKeyboardMarkup(keyboard))
+        await safe_edit_view(query, text, InlineKeyboardMarkup(keyboard))
         
     elif query.data.startswith("del_opencode_"):
         m_name = query.data.replace("del_opencode_", "")
@@ -376,7 +415,7 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
         for m in models:
             keyboard.append([InlineKeyboardButton(f"❌ {m}", callback_data=f"del_opencode_{m[:30]}")])
         keyboard.append([InlineKeyboardButton("⬅️ Back to CLI Tools", callback_data="cli_tools_menu")])
-        await safe_edit_message(query, text, InlineKeyboardMarkup(keyboard))
+        await safe_edit_view(query, text, InlineKeyboardMarkup(keyboard))
         
     elif query.data == "add_provider_menu":
         text = "➕ <b>SELECT PROVIDER INFRASTRUCTURE TYPE</b>\n\n"
@@ -392,7 +431,7 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
             [InlineKeyboardButton("🌐 Custom OpenAI-Compatible", callback_data="prov_type_custom")],
             [InlineKeyboardButton("⬅️ Return to Dashboard", callback_data="view_quota")]
         ]
-        await safe_edit_message(query, text, InlineKeyboardMarkup(keyboard))
+        await safe_edit_view(query, text, InlineKeyboardMarkup(keyboard))
 
 async def start_add_wizard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -418,7 +457,7 @@ async def start_add_wizard(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text += "4. <b>Paste the callback link into this chat</b>:\n\n"
             text += "<i>Send /cancel to abort.</i>"
             
-            await safe_edit_message(query, text, None)
+            await safe_edit_view(query, text, None)
             return ADD_OAUTH_CALLBACK
         except Exception as e:
             await query.edit_message_text(f"❌ OAuth generation failed: {e}")
@@ -428,7 +467,7 @@ async def start_add_wizard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text += "Enter a <b>Label/Display Name</b> for this provider (e.g. <code>Production Key</code>):\n\n"
     text += "<i>Send /cancel to abort.</i>"
     
-    await safe_edit_message(query, text, None)
+    await safe_edit_view(query, text, None)
     return ADD_NAME
 
 async def wizard_oauth_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
