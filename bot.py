@@ -43,6 +43,55 @@ def get_auth_token():
         print(f"Error generating token: {e}")
         return None
 
+def fetch_antigravity_telemetry():
+    conv_dir = os.path.expanduser("~/.gemini/antigravity-cli/conversations")
+    if not os.path.exists(conv_dir):
+        return {
+            "sessions": 0,
+            "steps": 0,
+            "est_prompt_tokens": 0,
+            "est_comp_tokens": 0,
+            "est_cost": 0.0
+        }
+    try:
+        db_files = [os.path.join(conv_dir, f) for f in os.listdir(conv_dir) if f.endswith(".db")]
+        total_sessions = len(db_files)
+        total_steps = 0
+        for db in db_files:
+            try:
+                conn = sqlite3.connect(db)
+                c = conn.cursor()
+                c.execute("SELECT COUNT(*) FROM steps")
+                row = c.fetchone()
+                if row:
+                    total_steps += row[0]
+                conn.close()
+            except Exception:
+                pass
+
+        est_prompt = total_steps * 65_000
+        est_comp = total_steps * 1_200
+        input_cost = (est_prompt / 1_000_000) * 0.075
+        output_cost = (est_comp / 1_000_000) * 0.30
+        est_cost = input_cost + output_cost
+
+        return {
+            "sessions": total_sessions,
+            "steps": total_steps,
+            "est_prompt_tokens": est_prompt,
+            "est_comp_tokens": est_comp,
+            "est_cost": est_cost
+        }
+    except Exception as e:
+        print(f"Antigravity scan error: {e}")
+        return {
+            "sessions": 0,
+            "steps": 0,
+            "est_prompt_tokens": 0,
+            "est_comp_tokens": 0,
+            "est_cost": 0.0
+        }
+
 def fetch_9router_stats():
     token = get_auth_token()
     headers = {"Authorization": f"Bearer {token}"}
@@ -60,6 +109,7 @@ def fetch_9router_stats():
     daily_db = {}
     recent_logs = []
     settings_db = {}
+    hermes_lifetime = {"cost": 0.0, "requests": 0}
     
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -100,7 +150,13 @@ def fetch_9router_stats():
                 "cost": r[6] or 0.0,
                 "status": r[7] or "ok"
             })
-            
+
+        c.execute("SELECT SUM(cost), COUNT(*) FROM usageHistory")
+        row_h = c.fetchone()
+        if row_h:
+            hermes_lifetime["cost"] = row_h[0] or 0.0
+            hermes_lifetime["requests"] = row_h[1] or 0
+
         c.execute("SELECT data FROM settings LIMIT 1")
         row_s = c.fetchone()
         if row_s:
@@ -113,12 +169,16 @@ def fetch_9router_stats():
     except Exception as e:
         print(f"DB fetch error: {e}")
         
+    agy_telemetry = fetch_antigravity_telemetry()
+
     return {
         "api": api_stats,
         "accounts": accounts,
         "daily": daily_db,
         "recent": recent_logs,
-        "settings": settings_db
+        "settings": settings_db,
+        "antigravity": agy_telemetry,
+        "hermes_lifetime": hermes_lifetime
     }
 
 def fetch_available_models_catalog(provider_filter="antigravity"):
@@ -356,6 +416,8 @@ def format_quota_report(data):
     daily = data.get("daily", {})
     accounts = data.get("accounts", [])
     settings = data.get("settings", {})
+    antigravity = data.get("antigravity", {})
+    period = data.get("period", "today").upper()
     
     total_req = api.get("totalRequests") or daily.get("requests") or 0
     prompt_tokens = (api.get("totalPromptTokens") or daily.get("promptTokens") or 0) / 1_000_000
@@ -363,102 +425,207 @@ def format_quota_report(data):
     cached_tokens = (api.get("totalCachedTokens") or 0) / 1_000_000
     cost = api.get("totalCost") or daily.get("cost") or 0.0
     
+    agy_sessions = antigravity.get("sessions", 0)
+    agy_steps = antigravity.get("steps", 0)
+    agy_cost = antigravity.get("est_cost", 0.0)
+
+    hermes_info = data.get("hermes_lifetime", {})
+    hermes_cost = hermes_info.get("cost", cost)
+    hermes_reqs = hermes_info.get("requests", total_req)
+    total_combined = hermes_cost + agy_cost
+
     rr_limit = settings.get("stickyRoundRobinLimit", 3)
+    caveman_on = settings.get("cavemanEnabled", False)
+    ponytail_on = settings.get("ponytailEnabled", False)
     
     cache_pct = (cached_tokens / prompt_tokens * 100) if prompt_tokens > 0 else 0
-    bar_len = 16
-    filled = int(bar_len * (cache_pct / 100))
-    bar = "▓" * filled + "░" * (bar_len - filled)
     
-    text = "⚡ <b>9ROUTER COMMAND HUB (REALTIME)</b> ⚡\n"
-    text += f"📅 <i>Sync: {time.strftime('%H:%M:%S')} UTC • Round-Robin: {rr_limit}x</i>\n\n"
+    text = f"⚡ <b>9ROUTER COMMAND HUB ({period})</b> ⚡\n"
+    text += f"<code>Balancer: Round-Robin ({rr_limit}x) • {time.strftime('%H:%M:%S')} UTC</code>\n\n"
     
-    text += "┌───────────────────────────────────┐\n"
-    text += f"│ 🚀 <b>TOTAL USAGE (24H)</b>\n"
-    text += "├───────────────────────────────────┤\n"
-    text += f"│ • Total Requests : <b>{total_req:,}x</b>\n"
-    text += f"│ • Prompt Tokens  : <b>{prompt_tokens:.2f} M</b>\n"
-    text += f"│ • Cached Tokens  : <b>{cached_tokens:.2f} M ({cache_pct:.1f}%)</b> ⚡\n"
-    text += f"│ • Comp. Tokens   : <b>{comp_tokens:.2f} K</b>\n"
-    text += f"│ • Total Cost     : <b>${cost:.4f}</b>\n"
-    text += "└───────────────────────────────────┘\n\n"
+    text += "┌─────────────────────────────────────┐\n"
+    text += f"│ 🚀 <b>TELEMETRY ({period})</b>\n"
+    text += f"│ • Requests: <b>{total_req:,}x</b> | Cost: <b>${cost:.4f}</b>\n"
+    text += f"│ • Ingest: <b>{prompt_tokens:.2f}M</b> | Cached: <b>{cached_tokens:.2f}M ({cache_pct:.1f}%)</b>\n"
+    text += f"│ • Output: <b>{comp_tokens:.2f}K tokens</b>\n"
+    text += "├─────────────────────────────────────┤\n"
+    text += "│ 🤖 <b>ANTIGRAVITY CLI</b>\n"
+    text += f"│ • Sessions: <b>{agy_sessions:,}</b> | Steps: <b>{agy_steps:,}</b>\n"
+    text += "├─────────────────────────────────────┤\n"
+    text += "│ 💰 <b>BIAYA TOTAL & KOMPARASI</b>\n"
+    text += f"│ • Hermes Chat : <b>${hermes_cost:.2f}</b> ({hermes_reqs:,} reqs)\n"
+    text += f"│ • agy Engine  : <b>${agy_cost:.2f}</b> ({agy_steps:,} steps)\n"
+    text += f"│ • Total Biaya : <b>${total_combined:.2f}</b>\n"
+    text += "└─────────────────────────────────────┘\n\n"
+
+    text += f"🛡️ <b>Saver</b>: Caveman {'🟢' if caveman_on else '🔴'} • Ponytail {'🟢' if ponytail_on else '🔴'}\n"
+    text += "👥 <b>Active Pool:</b> "
     
-    text += f"📈 <b>CACHE SAVINGS</b>: [{bar}] <b>{cache_pct:.1f}%</b>\n\n"
-    
-    text += "👥 <b>PROVIDER CONNECTIONS POOL</b>\n"
-    for idx, acc in enumerate(accounts, 1):
+    acc_items = []
+    for acc in accounts:
         status_dot = "🟢" if acc["active"] else "🔴"
-        last_used = acc["lastUsedAt"][11:19] if acc.get("lastUsedAt") else "-"
-        text += f"{idx}. {status_dot} <b>[{acc['provider'].upper()}]</b> <code>{acc['email']}</code>\n"
-        text += f"   └ Status: <b>{'Active' if acc['active'] else 'OFF'}</b> | Last: <code>{last_used} UTC</code>\n"
-        
+        acc_items.append(f"{status_dot} <code>{acc['email']}</code>")
+    
+    if acc_items:
+        text += ", ".join(acc_items)
+    else:
+        text += "<i>None</i>"
+
     return text
 
 def format_account_detailed_quota(data, target_email=None):
     api = data.get("api", {})
-    by_account = api.get("byAccount", {})
+    daily = data.get("daily", {})
     accounts = data.get("accounts", [])
     
     text = "🔍 <b>DETAIL QUOTA & TOKEN PER AKUN (24H)</b>\n\n"
     
+    conn_by_id = {}
+    conn_by_email = {}
+    for acc in accounts:
+        cid = acc.get("id")
+        email = acc.get("email")
+        name = acc.get("name")
+        if cid:
+            conn_by_id[cid] = acc
+        if email:
+            conn_by_email[email] = acc
+            conn_by_email[email.lower()] = acc
+        if name:
+            conn_by_email[name] = acc
+            conn_by_email[name.lower()] = acc
+
+    by_account = api.get("byAccount") or daily.get("byAccount") or {}
+    
     acc_map = {}
     for k, v in by_account.items():
-        email = v.get("accountName") or "Unknown"
-        if email not in acc_map:
-            acc_map[email] = {
+        conn_id = v.get("connectionId") or (k if k in conn_by_id else None)
+        conn_info = None
+        if conn_id and conn_id in conn_by_id:
+            conn_info = conn_by_id[conn_id]
+        else:
+            acct_name = v.get("accountName")
+            if acct_name and acct_name in conn_by_email:
+                conn_info = conn_by_email[acct_name]
+            elif k in conn_by_email:
+                conn_info = conn_by_email[k]
+            else:
+                for em, acc_obj in conn_by_email.items():
+                    if em in k:
+                        conn_info = acc_obj
+                        break
+
+        if conn_info:
+            acc_email = conn_info["email"]
+            acc_name = conn_info["name"]
+            acc_active = conn_info["active"]
+            acc_provider = conn_info["provider"]
+        else:
+            acc_email = v.get("accountName") or k
+            acc_name = acc_email
+            acc_active = False
+            acc_provider = v.get("provider", "unknown")
+
+        if acc_email not in acc_map:
+            acc_map[acc_email] = {
+                "email": acc_email,
+                "name": acc_name,
+                "provider": acc_provider,
+                "active": acc_active,
                 "requests": 0,
                 "promptTokens": 0,
                 "cachedTokens": 0,
                 "completionTokens": 0,
                 "cost": 0.0,
-                "models": []
+                "models": {}
             }
-        acc_map[email]["requests"] += v.get("requests", 0)
-        acc_map[email]["promptTokens"] += v.get("promptTokens", 0)
-        acc_map[email]["cachedTokens"] += v.get("cachedTokens", 0)
-        acc_map[email]["completionTokens"] += v.get("completionTokens", 0)
-        acc_map[email]["cost"] += v.get("cost", 0.0)
-        acc_map[email]["models"].append({
-            "model": v.get("rawModel"),
-            "reqs": v.get("requests", 0),
-            "cost": v.get("cost", 0.0)
-        })
-        
+
+        entry = acc_map[acc_email]
+        entry["requests"] += v.get("requests", 0)
+        entry["promptTokens"] += v.get("promptTokens", 0)
+        entry["cachedTokens"] += v.get("cachedTokens", 0)
+        entry["completionTokens"] += v.get("completionTokens", 0)
+        entry["cost"] += v.get("cost", 0.0)
+
+        raw_model = v.get("rawModel") or v.get("model") or "unknown"
+        if raw_model not in entry["models"]:
+            entry["models"][raw_model] = {"reqs": 0, "cost": 0.0}
+        entry["models"][raw_model]["reqs"] += v.get("requests", 0)
+        entry["models"][raw_model]["cost"] += v.get("cost", 0.0)
+
     if target_email:
         acc_info = acc_map.get(target_email)
-        conn_info = next((a for a in accounts if a["email"] == target_email), None)
-        status_str = "🟢 ACTIVE (In Pool)" if (conn_info and conn_info["active"]) else "🔴 OFF"
+        if not acc_info:
+            target_lower = target_email.lower()
+            for em, info in acc_map.items():
+                if em.lower() == target_lower:
+                    acc_info = info
+                    break
         
-        text += f"👤 <b>Akun:</b> <code>{target_email}</code>\n"
-        text += f"• Status Pool: {status_str}\n\n"
+        conn_info = conn_by_email.get(target_email) or conn_by_email.get(target_email.lower()) or next((a for a in accounts if a["email"] == target_email or a["id"] == target_email), None)
         
-        if acc_info:
+        acc_name_display = acc_info["name"] if acc_info else (conn_info["name"] if conn_info else target_email)
+        acc_email_display = acc_info["email"] if acc_info else (conn_info["email"] if conn_info else target_email)
+        is_active = acc_info["active"] if acc_info else (conn_info["active"] if conn_info else False)
+        provider_name = acc_info["provider"] if acc_info else (conn_info["provider"] if conn_info else "UNKNOWN")
+
+        status_str = "🟢 ACTIVE (In Pool)" if is_active else "🔴 OFF"
+
+        text += f"👤 <b>Akun:</b> <code>{acc_email_display}</code>\n"
+        if acc_name_display and acc_name_display != acc_email_display:
+            text += f"• <b>Nama:</b> <code>{acc_name_display}</code>\n"
+        text += f"• <b>Provider:</b> <code>{provider_name.upper()}</code>\n"
+        text += f"• <b>Status Pool:</b> {status_str}\n\n"
+
+        if acc_info and acc_info["requests"] > 0:
             p_m = acc_info["promptTokens"] / 1_000_000
             c_m = acc_info["cachedTokens"] / 1_000_000
             comp_k = acc_info["completionTokens"] / 1_000
             c_pct = (c_m / p_m * 100) if p_m > 0 else 0
-            
-            text += f"📊 <b>Statistik Token:</b>\n"
+
+            text += "📊 <b>Statistik Token:</b>\n"
             text += f" • Requests Total  : <b>{acc_info['requests']:,}x</b>\n"
             text += f" • Prompt Ingested : <b>{p_m:.2f} M</b>\n"
             text += f" • Cached (Free)   : <b>{c_m:.2f} M ({c_pct:.1f}%)</b> ⚡\n"
             text += f" • Completion Out  : <b>{comp_k:.2f} K</b>\n"
             text += f" • Total Cost      : <b>${acc_info['cost']:.4f}</b>\n\n"
-            
-            text += f"🧠 <b>Model yang Dipakai:</b>\n"
-            for m in acc_info["models"]:
-                text += f" └ <code>{m['model']}</code> : <b>{m['reqs']}x</b> (${m['cost']:.4f})\n"
+
+            text += "🧠 <b>Model yang Dipakai:</b>\n"
+            for m_name, m_data in acc_info["models"].items():
+                text += f" └ <code>{m_name}</code> : <b>{m_data['reqs']}x</b> (${m_data['cost']:.4f})\n"
         else:
             text += "<i>Belum ada riwayat request untuk akun ini hari ini.</i>\n"
         return text
 
-    # List all
-    for idx, (email, st) in enumerate(acc_map.items(), 1):
-        p_m = st["promptTokens"] / 1_000_000
-        text += f"{idx}. 🟢 <code>{email}</code>\n"
-        text += f"   • Requests : <b>{st['requests']}x</b> | Tokens: <b>{p_m:.2f}M</b>\n"
-        text += f"   • Cost     : <b>${st['cost']:.4f}</b>\n\n"
-        
+    if not accounts and not acc_map:
+        return text + "<i>Belum ada akun terkonfigurasi atau penggunaan hari ini.</i>"
+
+    seen_emails = set()
+    idx = 1
+    for acc in accounts:
+        email = acc["email"]
+        seen_emails.add(email)
+        status_dot = "🟢" if acc["active"] else "🔴"
+        st = acc_map.get(email)
+        if st:
+            p_m = st["promptTokens"] / 1_000_000
+            comp_k = st["completionTokens"] / 1_000
+            text += f"{idx}. {status_dot} <b>[{acc['provider'].upper()}]</b> <code>{email}</code>\n"
+            text += f"   • Requests : <b>{st['requests']}x</b> | Ingest: <b>{p_m:.2f}M</b> | Out: <b>{comp_k:.2f}K</b> | Cost: <b>${st['cost']:.4f}</b>\n\n"
+        else:
+            text += f"{idx}. {status_dot} <b>[{acc['provider'].upper()}]</b> <code>{email}</code>\n"
+            text += "   • Requests : <b>0x</b> | Ingest: <b>0.00M</b> | Out: <b>0.00K</b> | Cost: <b>$0.0000</b>\n\n"
+        idx += 1
+
+    for email, st in acc_map.items():
+        if email not in seen_emails:
+            status_dot = "🟢" if st["active"] else "🔴"
+            p_m = st["promptTokens"] / 1_000_000
+            comp_k = st["completionTokens"] / 1_000
+            text += f"{idx}. {status_dot} <b>[{st['provider'].upper()}]</b> <code>{email}</code>\n"
+            text += f"   • Requests : <b>{st['requests']}x</b> | Ingest: <b>{p_m:.2f}M</b> | Out: <b>{comp_k:.2f}K</b> | Cost: <b>${st['cost']:.4f}</b>\n\n"
+            idx += 1
+
     return text
 
 def format_recent_logs(data):
@@ -515,9 +682,10 @@ def build_main_keyboard():
         ],
         [
             InlineKeyboardButton("🎯 Round Robin", callback_data="rr_menu"),
-            InlineKeyboardButton("💻 Opencode CLI Manager", callback_data="cli_tools_menu")
+            InlineKeyboardButton("🔀 Combos & Adapters", callback_data="combos_adapters_menu")
         ],
         [
+            InlineKeyboardButton("💻 Opencode CLI Manager", callback_data="cli_tools_menu"),
             InlineKeyboardButton("➕ Tambah Provider", callback_data="add_provider_menu")
         ]
     ])

@@ -30,9 +30,10 @@ def get_main_menu_keyboard(period="today"):
         ],
         [
             InlineKeyboardButton("⚙️ Kelola Akun & Hapus", callback_data="manage_accounts"),
-            InlineKeyboardButton("💻 Opencode CLI Manager", callback_data="cli_tools_menu")
+            InlineKeyboardButton("🔀 Combos & Adapters", callback_data="combos_adapters_menu")
         ],
         [
+            InlineKeyboardButton("💻 Opencode CLI Manager", callback_data="cli_tools_menu"),
             InlineKeyboardButton("➕ Tambah Provider Baru", callback_data="add_provider_menu")
         ]
     ])
@@ -60,5 +61,31 @@ def get_token_saver_keyboard(settings):
         ]
     ])
 
+def get_combos_adapters_keyboard(adapters_data):
+    vision = adapters_data.get("vision", {})
+    audio = adapters_data.get("audioInput", {})
+    
+    v_status = "🟢 Vision: ON" if vision.get("enabled") else "🔴 Vision: OFF"
+    v_rr = "🔄 Vision RR: ON" if vision.get("roundRobin") else "➡️ Vision RR: OFF"
+    
+    a_status = "🟢 Audio: ON" if audio.get("enabled") else "🔴 Audio: OFF"
+    a_rr = "🔄 Audio RR: ON" if audio.get("roundRobin") else "➡️ Audio RR: OFF"
+    
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(v_status, callback_data="adapter_toggle_vision_enabled"),
+            InlineKeyboardButton(v_rr, callback_data="adapter_toggle_vision_roundRobin")
+        ],
+        [
+            InlineKeyboardButton(a_status, callback_data="adapter_toggle_audioInput_enabled"),
+            InlineKeyboardButton(a_rr, callback_data="adapter_toggle_audioInput_roundRobin")
+        ],
+        [
+            InlineKeyboardButton("🔄 Refresh Hub", callback_data="combos_adapters_menu"),
+            InlineKeyboardButton("⬅️ Return to Dashboard", callback_data="view_quota")
+        ]
+    ])
+
 def get_back_button(callback_data="view_quota"):
     return InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Return to Dashboard", callback_data=callback_data)]])
+

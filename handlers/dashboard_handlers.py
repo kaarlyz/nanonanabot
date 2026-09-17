@@ -17,6 +17,8 @@ from services.router_service import (
     add_opencode_model_file,
     delete_opencode_model_file,
     toggle_token_saver_feature,
+    fetch_combos_and_adapters,
+    toggle_adapter_feature,
     get_auth_token,
 )
 from utils.formatter import (
@@ -25,15 +27,24 @@ from utils.formatter import (
     format_models_breakdown,
     format_account_detailed_quota,
     format_token_saver_dashboard,
+    format_combos_adapters_dashboard,
 )
-from core.keyboards import get_main_menu_keyboard, get_token_saver_keyboard, get_back_button
+from core.keyboards import (
+    get_main_menu_keyboard,
+    get_token_saver_keyboard,
+    get_combos_adapters_keyboard,
+    get_back_button,
+)
 from config.settings import BASE_URL, BANNER_IMAGE_PATH
 
 ADD_NAME, ADD_KEY, ADD_URL, ADD_OAUTH_CALLBACK = range(4)
 
 async def send_or_edit_banner(target_msg, text, reply_markup, chat_id=None, bot=None):
-    # If the target message is already a photo message, edit its caption directly
-    if target_msg and getattr(target_msg, "photo", None):
+    # Telegram photo caption length limit is 1024 characters
+    is_caption_too_long = len(text) > 1000
+
+    # If caption is under limit and target message is already a photo, edit caption directly
+    if not is_caption_too_long and target_msg and getattr(target_msg, "photo", None):
         try:
             await target_msg.edit_caption(caption=text, parse_mode="HTML", reply_markup=reply_markup)
             return
@@ -44,25 +55,30 @@ async def send_or_edit_banner(target_msg, text, reply_markup, chat_id=None, bot=
         except Exception:
             pass
 
-    # If it was a plain text message, delete the old text and send as photo
+    # If it was a photo message but text is > 1000, or plain text, delete old message before sending fresh
     if target_msg:
         try:
             await target_msg.delete()
         except Exception:
             pass
 
-    # Send fresh photo message with banner
-    if os.path.exists(BANNER_IMAGE_PATH):
-        with open(BANNER_IMAGE_PATH, "rb") as photo:
-            if bot and chat_id:
-                await bot.send_photo(chat_id=chat_id, photo=photo, caption=text, parse_mode="HTML", reply_markup=reply_markup)
-            elif target_msg:
-                await target_msg.reply_photo(photo=photo, caption=text, parse_mode="HTML", reply_markup=reply_markup)
-    else:
-        if bot and chat_id:
-            await bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML", reply_markup=reply_markup)
-        elif target_msg:
-            await target_msg.reply_html(text=text, reply_markup=reply_markup)
+    # Send fresh message: photo with caption if <= 1000, or plain HTML message fallback if > 1000 or no photo
+    if not is_caption_too_long and os.path.exists(BANNER_IMAGE_PATH):
+        try:
+            with open(BANNER_IMAGE_PATH, "rb") as photo:
+                if bot and chat_id:
+                    await bot.send_photo(chat_id=chat_id, photo=photo, caption=text, parse_mode="HTML", reply_markup=reply_markup)
+                elif target_msg:
+                    await target_msg.reply_photo(photo=photo, caption=text, parse_mode="HTML", reply_markup=reply_markup)
+            return
+        except Exception:
+            pass
+
+    # Fallback to regular text message
+    if bot and chat_id:
+        await bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML", reply_markup=reply_markup)
+    elif target_msg:
+        await target_msg.reply_html(text=text, reply_markup=reply_markup)
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     period = context.user_data.get("period", "today")
@@ -99,6 +115,22 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
         settings = data.get("settings", {})
         text = format_token_saver_dashboard(settings)
         await send_or_edit_banner(query.message, text, get_token_saver_keyboard(settings))
+
+    elif query.data == "combos_adapters_menu":
+        ca_data = fetch_combos_and_adapters()
+        text = format_combos_adapters_dashboard(ca_data)
+        await send_or_edit_banner(query.message, text, get_combos_adapters_keyboard(ca_data.get("adapters", {})))
+
+    elif query.data.startswith("adapter_toggle_"):
+        parts = query.data.replace("adapter_toggle_", "").split("_")
+        if len(parts) >= 2:
+            adapter_type = parts[0]
+            setting_key = parts[1]
+            ok, msg = toggle_adapter_feature(adapter_type, setting_key)
+            await query.answer(msg)
+        ca_data = fetch_combos_and_adapters()
+        text = format_combos_adapters_dashboard(ca_data)
+        await send_or_edit_banner(query.message, text, get_combos_adapters_keyboard(ca_data.get("adapters", {})))
         
     elif query.data.startswith("ts_toggle_"):
         feat = query.data.replace("ts_toggle_", "")

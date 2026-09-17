@@ -25,6 +25,55 @@ def get_auth_token():
         print(f"Error generating token: {e}")
         return None
 
+def fetch_antigravity_telemetry():
+    conv_dir = os.path.expanduser("~/.gemini/antigravity-cli/conversations")
+    if not os.path.exists(conv_dir):
+        return {
+            "sessions": 0,
+            "steps": 0,
+            "est_prompt_tokens": 0,
+            "est_comp_tokens": 0,
+            "est_cost": 0.0
+        }
+    try:
+        db_files = [os.path.join(conv_dir, f) for f in os.listdir(conv_dir) if f.endswith(".db")]
+        total_sessions = len(db_files)
+        total_steps = 0
+        for db in db_files:
+            try:
+                conn = sqlite3.connect(db)
+                c = conn.cursor()
+                c.execute("SELECT COUNT(*) FROM steps")
+                row = c.fetchone()
+                if row:
+                    total_steps += row[0]
+                conn.close()
+            except Exception:
+                pass
+                
+        est_prompt = total_steps * 65_000
+        est_comp = total_steps * 1_200
+        input_cost = (est_prompt / 1_000_000) * 0.075
+        output_cost = (est_comp / 1_000_000) * 0.30
+        est_cost = input_cost + output_cost
+
+        return {
+            "sessions": total_sessions,
+            "steps": total_steps,
+            "est_prompt_tokens": est_prompt,
+            "est_comp_tokens": est_comp,
+            "est_cost": est_cost
+        }
+    except Exception as e:
+        print(f"Antigravity scan error: {e}")
+        return {
+            "sessions": 0,
+            "steps": 0,
+            "est_prompt_tokens": 0,
+            "est_comp_tokens": 0,
+            "est_cost": 0.0
+        }
+
 def fetch_9router_stats(period="today"):
     token = get_auth_token()
     headers = {"Authorization": f"Bearer {token}"}
@@ -42,6 +91,7 @@ def fetch_9router_stats(period="today"):
     daily_db = {}
     recent_logs = []
     settings_db = {}
+    hermes_lifetime = {"cost": 0.0, "requests": 0}
     
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -83,6 +133,12 @@ def fetch_9router_stats(period="today"):
                 "status": r[7] or "ok"
             })
             
+        c.execute("SELECT SUM(cost), COUNT(*) FROM usageHistory")
+        row_h = c.fetchone()
+        if row_h:
+            hermes_lifetime["cost"] = row_h[0] or 0.0
+            hermes_lifetime["requests"] = row_h[1] or 0
+
         c.execute("SELECT data FROM settings LIMIT 1")
         row_s = c.fetchone()
         if row_s:
@@ -95,13 +151,17 @@ def fetch_9router_stats(period="today"):
     except Exception as e:
         print(f"DB fetch error: {e}")
         
+    agy_telemetry = fetch_antigravity_telemetry()
+
     return {
         "period": period,
         "api": api_stats,
         "accounts": accounts,
         "daily": daily_db,
         "recent": recent_logs,
-        "settings": settings_db
+        "settings": settings_db,
+        "antigravity": agy_telemetry,
+        "hermes_lifetime": hermes_lifetime
     }
 
 def toggle_token_saver_feature(feature_key):
@@ -361,3 +421,159 @@ def delete_opencode_model_file(model_name):
     except Exception as e:
         return False, str(e)
     return False, "Model tidak ditemukan."
+
+def fetch_combos_and_adapters():
+    combos = []
+    adapters = {"vision": {"enabled": False, "roundRobin": False, "models": []}, "audioInput": {"enabled": False, "roundRobin": False, "models": []}}
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        
+        c.execute("SELECT id, name, kind, models, createdAt, updatedAt FROM combos ORDER BY id DESC")
+        for r in c.fetchall():
+            models_list = []
+            try:
+                models_list = json.loads(r[3]) if r[3] else []
+            except:
+                pass
+            combos.append({
+                "id": r[0],
+                "name": r[1],
+                "kind": r[2],
+                "models": models_list,
+                "createdAt": r[4],
+                "updatedAt": r[5]
+            })
+            
+        c.execute("SELECT data FROM settings LIMIT 1")
+        row_s = c.fetchone()
+        if row_s:
+            try:
+                s_data = json.loads(row_s[0])
+                if "capacityAdapter" in s_data:
+                    cap = s_data["capacityAdapter"]
+                    if "vision" in cap:
+                        adapters["vision"].update(cap["vision"])
+                    if "audioInput" in cap:
+                        adapters["audioInput"].update(cap["audioInput"])
+            except Exception as e:
+                print("Settings capacityAdapter parse error:", e)
+                
+        conn.close()
+    except Exception as e:
+        print("fetch_combos_and_adapters error:", e)
+
+    return {
+        "combos": combos,
+        "adapters": adapters
+    }
+
+def toggle_adapter_feature(adapter_type, setting_key="enabled"):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("SELECT data FROM settings WHERE id = 1")
+        row = c.fetchone()
+        data = json.loads(row[0]) if row else {}
+        
+        if "capacityAdapter" not in data:
+            data["capacityAdapter"] = {}
+        if adapter_type not in data["capacityAdapter"]:
+            data["capacityAdapter"][adapter_type] = {"enabled": False, "roundRobin": False, "models": []}
+            
+        cur = data["capacityAdapter"][adapter_type].get(setting_key, False)
+        new_val = not cur
+        data["capacityAdapter"][adapter_type][setting_key] = new_val
+        
+        c.execute("UPDATE settings SET data = ? WHERE id = 1", (json.dumps(data),))
+        conn.commit()
+        conn.close()
+        
+        label = "Round-Robin" if setting_key == "roundRobin" else "Status"
+        val_str = "🟢 ON" if new_val else "🔴 OFF"
+        return True, f"Modality Adapter <b>{adapter_type.upper()}</b> ({label}): {val_str}"
+    except Exception as e:
+        return False, str(e)
+
+def add_adapter_model(adapter_type, model_name):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("SELECT data FROM settings WHERE id = 1")
+        row = c.fetchone()
+        data = json.loads(row[0]) if row else {}
+        
+        if "capacityAdapter" not in data:
+            data["capacityAdapter"] = {}
+        if adapter_type not in data["capacityAdapter"]:
+            data["capacityAdapter"][adapter_type] = {"enabled": False, "roundRobin": False, "models": []}
+            
+        models = data["capacityAdapter"][adapter_type].get("models", [])
+        if model_name not in models:
+            models.append(model_name)
+            data["capacityAdapter"][adapter_type]["models"] = models
+            c.execute("UPDATE settings SET data = ? WHERE id = 1", (json.dumps(data),))
+            conn.commit()
+            conn.close()
+            return True, f"✅ Model <code>{model_name}</code> ditambahkan ke Adapter <b>{adapter_type.upper()}</b>!"
+        else:
+            conn.close()
+            return False, "Model sudah ada di adapter ini."
+    except Exception as e:
+        return False, str(e)
+
+def remove_adapter_model(adapter_type, model_name):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("SELECT data FROM settings WHERE id = 1")
+        row = c.fetchone()
+        data = json.loads(row[0]) if row else {}
+        
+        if "capacityAdapter" in data and adapter_type in data["capacityAdapter"]:
+            models = data["capacityAdapter"][adapter_type].get("models", [])
+            if model_name in models:
+                models.remove(model_name)
+                data["capacityAdapter"][adapter_type]["models"] = models
+                c.execute("UPDATE settings SET data = ? WHERE id = 1", (json.dumps(data),))
+                conn.commit()
+                conn.close()
+                return True, f"🗑️ Model <code>{model_name}</code> dihapus dari Adapter <b>{adapter_type.upper()}</b>!"
+        conn.close()
+        return False, "Model tidak ditemukan di adapter."
+    except Exception as e:
+        return False, str(e)
+
+def create_combo(name, kind, models_list):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        new_id = str(uuid.uuid4())
+        now_iso = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
+        c.execute("""
+            INSERT INTO combos (id, name, kind, models, createdAt, updatedAt)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (new_id, name, kind, json.dumps(models_list), now_iso, now_iso))
+        conn.commit()
+        conn.close()
+        return True, f"✨ Combo <b>{name}</b> ({kind}) berhasil dibuat!"
+    except Exception as e:
+        return False, str(e)
+
+def delete_combo(combo_id):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("SELECT name FROM combos WHERE id = ?", (combo_id,))
+        row = c.fetchone()
+        if not row:
+            conn.close()
+            return False, "Combo tidak ditemukan."
+        name = row[0]
+        c.execute("DELETE FROM combos WHERE id = ?", (combo_id,))
+        conn.commit()
+        conn.close()
+        return True, f"🗑️ Combo <b>{name}</b> berhasil dihapus!"
+    except Exception as e:
+        return False, str(e)
+
