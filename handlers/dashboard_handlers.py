@@ -452,20 +452,46 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
         keyboard.append([InlineKeyboardButton("⬅️ Back to CLI Tools", callback_data="cli_tools_menu")])
         await send_or_edit_banner(query.message, text, InlineKeyboardMarkup(keyboard))
         
-    elif query.data == "add_provider_menu":
-        text = "➕ <b>SELECT PROVIDER INFRASTRUCTURE TYPE</b>\n\n"
-        text += "Choose authentication type to link into 9Router gateway:\n\n"
-        text += "1. <b>Google Antigravity (Gemini / Claude Pro-Tier Pool)</b>\n"
-        text += "2. <b>Groq / DeepSeek / OpenAI / OpenRouter</b> (API Key)\n"
-        text += "3. <b>Custom OpenAI Compatible</b> (Key + Private Base URL)\n"
+    elif query.data and (query.data.startswith("add_prov_page_") or query.data == "add_provider_menu"):
+        from services.provider_catalog import FEATURED_PROVIDERS
+        page = 0
+        if query.data.startswith("add_prov_page_"):
+            page = int(query.data.replace("add_prov_page_", ""))
+            
+        PER_PAGE = 6
+        total_pages = (len(FEATURED_PROVIDERS) + PER_PAGE - 1) // PER_PAGE
+        page = max(0, min(page, total_pages - 1))
         
-        keyboard = [
-            [InlineKeyboardButton("🚀 Google Antigravity (OAuth)", callback_data="prov_type_antigravity")],
-            [InlineKeyboardButton("🟣 Groq API", callback_data="prov_type_groq"), InlineKeyboardButton("🔵 DeepSeek API", callback_data="prov_type_deepseek")],
-            [InlineKeyboardButton("🟢 OpenAI API", callback_data="prov_type_openai"), InlineKeyboardButton("🟠 OpenRouter", callback_data="prov_type_openrouter")],
-            [InlineKeyboardButton("🌐 Custom OpenAI-Compatible", callback_data="prov_type_custom")],
-            [InlineKeyboardButton("⬅️ Return to Dashboard", callback_data="view_quota")]
-        ]
+        start = page * PER_PAGE
+        end = start + PER_PAGE
+        current_providers = FEATURED_PROVIDERS[start:end]
+        
+        text = "➕ <b>SELECT PROVIDER INFRASTRUCTURE TYPE</b>\n\n"
+        text += f"Choose an AI provider to link into 9Router (Page {page + 1}/{total_pages}):\n\n"
+        
+        keyboard = []
+        # Build 2-column buttons for current page
+        row = []
+        for p in current_providers:
+            btn_text = f"{p['icon']} {p['name']}"
+            row.append(InlineKeyboardButton(btn_text, callback_data=f"prov_type_{p['id']}"))
+            if len(row) == 2:
+                keyboard.append(row)
+                row = []
+        if row:
+            keyboard.append(row)
+            
+        # Pagination controls
+        nav_row = []
+        if page > 0:
+            nav_row.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"add_prov_page_{page - 1}"))
+        if page < total_pages - 1:
+            nav_row.append(InlineKeyboardButton("Next ➡️", callback_data=f"add_prov_page_{page + 1}"))
+        if nav_row:
+            keyboard.append(nav_row)
+            
+        keyboard.append([InlineKeyboardButton("🌐 Custom Provider / Input Manual", callback_data="prov_type_custom")])
+        keyboard.append([InlineKeyboardButton("⬅️ Return to Dashboard", callback_data="view_quota")])
         await send_or_edit_banner(query.message, text, InlineKeyboardMarkup(keyboard))
 
 async def start_add_wizard(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -533,8 +559,8 @@ async def wizard_key_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
     prov_type = context.user_data.get("prov_type")
     name = context.user_data.get("prov_name")
     
-    if prov_type == "custom":
-        text = f"🌐 Enter <b>Base URL Endpoint</b> (e.g. <code>https://api.together.xyz/v1</code>):\n"
+    if prov_type == "custom" or prov_type == "ollama":
+        text = f"🌐 Enter <b>Base URL Endpoint</b> (e.g. <code>http://localhost:11434/v1</code> for Ollama):\n"
         await update.message.reply_html(text)
         return ADD_URL
     else:
