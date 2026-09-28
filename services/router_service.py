@@ -210,7 +210,7 @@ def trigger_provider_healthcheck(provider_id=None):
         if r.status_code == 200:
             res = r.json()
             results = res.get("results", [])
-            passed = sum(1 for x in results if x.get("status") == "success" or x.get("success") is True)
+            passed = sum(1 for x in results if x.get("valid") is True or x.get("status") == "success" or x.get("success") is True)
             failed = len(results) - passed
             return True, f"🩺 <b>Healthcheck Selesai!</b>\n\n• Total Diuji: <b>{len(results)}</b>\n• 🟢 Berhasil/Aktif: <b>{passed}</b>\n• 🔴 Gagal: <b>{failed}</b>\n\n<i>Akun yang cooldown sudah di-refresh dan siap digunakan kembali.</i>"
         else:
