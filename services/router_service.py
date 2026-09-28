@@ -199,6 +199,25 @@ def toggle_token_saver_feature(feature_key):
     except Exception as e:
         return False, str(e)
 
+def trigger_provider_healthcheck(provider_id=None):
+    token = get_auth_token()
+    cookies = {"auth_token": token}
+    try:
+        payload = {"mode": "all"}
+        if provider_id:
+            payload = {"mode": "provider", "provider": provider_id}
+        r = requests.post(f"{BASE_URL}/api/providers/test-batch", json=payload, cookies=cookies, timeout=25)
+        if r.status_code == 200:
+            res = r.json()
+            results = res.get("results", [])
+            passed = sum(1 for x in results if x.get("status") == "success" or x.get("success") is True)
+            failed = len(results) - passed
+            return True, f"🩺 <b>Healthcheck Selesai!</b>\n\n• Total Diuji: <b>{len(results)}</b>\n• 🟢 Berhasil/Aktif: <b>{passed}</b>\n• 🔴 Gagal: <b>{failed}</b>\n\n<i>Akun yang cooldown sudah di-refresh dan siap digunakan kembali.</i>"
+        else:
+            return False, f"HTTP {r.status_code}: {r.text[:100]}"
+    except Exception as e:
+        return False, str(e)
+
 def fetch_available_models_catalog(provider_filter="antigravity"):
     token = get_auth_token()
     cookies = {"auth_token": token}

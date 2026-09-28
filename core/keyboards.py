@@ -30,10 +30,13 @@ def get_main_menu_keyboard(period="today"):
         ],
         [
             InlineKeyboardButton("⚙️ Kelola Akun & Hapus", callback_data="manage_accounts"),
-            InlineKeyboardButton("🔀 Combos & Adapters", callback_data="combos_adapters_menu")
+            InlineKeyboardButton("🩺 Healthcheck & Reset 403", callback_data="run_healthcheck_all")
         ],
         [
-            InlineKeyboardButton("💻 Opencode CLI Manager", callback_data="cli_tools_menu"),
+            InlineKeyboardButton("🔀 Combos & Adapters", callback_data="combos_adapters_menu"),
+            InlineKeyboardButton("💻 Opencode CLI Manager", callback_data="cli_tools_menu")
+        ],
+        [
             InlineKeyboardButton("➕ Tambah Provider Baru", callback_data="add_provider_menu")
         ]
     ])

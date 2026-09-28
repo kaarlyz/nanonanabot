@@ -111,6 +111,18 @@ async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_
         text = format_quota_report(data)
         await send_or_edit_banner(query.message, text, get_main_menu_keyboard(cur_period))
         
+    elif query.data == "run_healthcheck_all":
+        from services.router_service import trigger_provider_healthcheck
+        await query.answer("⏳ Menguji & mereset cooldown akun...")
+        text_loading = "⏳ <b>HEALTHCHECK IN PROGRESS...</b>\n\nSedang menguji koneksi semua akun dan mereset status cooldown 403 di 9Router..."
+        await send_or_edit_banner(query.message, text_loading, None)
+        ok, msg = trigger_provider_healthcheck()
+        keyboard = [
+            [InlineKeyboardButton("🔄 Refresh Dashboard", callback_data="view_quota")],
+            [InlineKeyboardButton("⚙️ Kelola Akun", callback_data="manage_accounts")]
+        ]
+        await send_or_edit_banner(query.message, msg, InlineKeyboardMarkup(keyboard))
+        
     elif query.data == "token_saver_menu":
         settings = data.get("settings", {})
         text = format_token_saver_dashboard(settings)
