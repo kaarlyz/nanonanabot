@@ -22,6 +22,24 @@ from handlers.dashboard_handlers import (
     ADD_URL,
 )
 
+
+async def auto_healthcheck_job(context):
+    from services.router_service import trigger_batch_healthcheck, get_auth_token
+    from config.settings import ADMIN_USER_ID
+    if not ADMIN_USER_ID:
+        return
+    try:
+        res = trigger_batch_healthcheck()
+        cooldown_or_dead = [acc for acc in res.get("tested", []) if not acc.get("valid")]
+        if cooldown_or_dead:
+            text = f"⚠️ <b>[9Router Alert] Terdeteksi {len(cooldown_or_dead)} Akun Bermasalah:</b>\n"
+            for acc in cooldown_or_dead[:5]:
+                text += f"• <code>{acc.get('name', 'Acc')}</code>: {acc.get('error', 'Error/Cooldown')}\n"
+            text += "\n<i>Silakan tekan tombol '🩺 Healthcheck & Reset 403' di bot untuk me-refresh.</i>"
+            await context.bot.send_message(chat_id=int(ADMIN_USER_ID), text=text, parse_mode="HTML")
+    except Exception as e:
+        print(f"Auto-healthcheck job error: {e}")
+
 def main():
     print("🚀 Initializing 9Router Professional Enterprise Bot...")
     app = Application.builder().token(BOT_TOKEN).build()
@@ -43,6 +61,10 @@ def main():
     app.add_handler(CommandHandler(["start", "dashboard", "quota", "token", "usage"], start_command))
     app.add_handler(wizard_handler)
     app.add_handler(CallbackQueryHandler(button_callback_handler))
+    
+    # Scheduled Background Healthcheck (every 30 mins)
+    if app.job_queue:
+        app.job_queue.run_repeating(auto_healthcheck_job, interval=1800, first=60)
     
     print("⚡ 9Router Enterprise Telegram Service is now online and polling...")
     app.run_polling()

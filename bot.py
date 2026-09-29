@@ -19,7 +19,8 @@ from telegram.ext import (
     filters,
 )
 
-BOT_TOKEN = "8962868813:AAHQ41Up7TFKSJMeLk4Ao1O6c-9SY9Wq6ho"
+from config.settings import BOT_TOKEN, ADMIN_USER_ID
+# BOT_TOKEN loaded from config
 DB_PATH = "/home/vallencia/.9router/db/data.sqlite"
 JWT_SECRET_PATH = "/home/vallencia/.9router/jwt-secret"
 BASE_URL = "http://127.0.0.1:20128"

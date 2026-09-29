@@ -94,7 +94,7 @@ def fetch_9router_stats(period="today"):
     hermes_lifetime = {"cost": 0.0, "requests": 0}
     
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=10)
         c = conn.cursor()
         
         c.execute("SELECT id, provider, name, email, isActive, priority, data FROM providerConnections ORDER BY priority ASC, id ASC")
@@ -166,7 +166,7 @@ def fetch_9router_stats(period="today"):
 
 def toggle_token_saver_feature(feature_key):
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=10)
         c = conn.cursor()
         c.execute("SELECT data FROM settings WHERE id = 1")
         row = c.fetchone()
@@ -244,7 +244,7 @@ def fetch_available_models_catalog(provider_filter="antigravity"):
 
 def toggle_account_db(account_id):
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=10)
         c = conn.cursor()
         c.execute("SELECT isActive, email, name FROM providerConnections WHERE id = ?", (account_id,))
         row = c.fetchone()
@@ -263,7 +263,7 @@ def toggle_account_db(account_id):
 
 def delete_account_db(account_id):
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=10)
         c = conn.cursor()
         c.execute("SELECT email, name FROM providerConnections WHERE id = ?", (account_id,))
         row = c.fetchone()
@@ -280,7 +280,7 @@ def delete_account_db(account_id):
 
 def set_round_robin_limit(limit_val):
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=10)
         c = conn.cursor()
         c.execute("SELECT data FROM settings LIMIT 1")
         row = c.fetchone()
@@ -303,7 +303,7 @@ def set_round_robin_limit(limit_val):
 
 def add_custom_provider_db(provider_type, name, api_key, custom_url=None):
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=10)
         c = conn.cursor()
         new_id = str(uuid.uuid4())
         now_iso = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
@@ -445,7 +445,7 @@ def fetch_combos_and_adapters():
     combos = []
     adapters = {"vision": {"enabled": False, "roundRobin": False, "models": []}, "audioInput": {"enabled": False, "roundRobin": False, "models": []}}
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=10)
         c = conn.cursor()
         
         c.execute("SELECT id, name, kind, models, createdAt, updatedAt FROM combos ORDER BY id DESC")
@@ -489,7 +489,7 @@ def fetch_combos_and_adapters():
 
 def toggle_adapter_feature(adapter_type, setting_key="enabled"):
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=10)
         c = conn.cursor()
         c.execute("SELECT data FROM settings WHERE id = 1")
         row = c.fetchone()
@@ -516,7 +516,7 @@ def toggle_adapter_feature(adapter_type, setting_key="enabled"):
 
 def add_adapter_model(adapter_type, model_name):
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=10)
         c = conn.cursor()
         c.execute("SELECT data FROM settings WHERE id = 1")
         row = c.fetchone()
@@ -543,7 +543,7 @@ def add_adapter_model(adapter_type, model_name):
 
 def remove_adapter_model(adapter_type, model_name):
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=10)
         c = conn.cursor()
         c.execute("SELECT data FROM settings WHERE id = 1")
         row = c.fetchone()
@@ -565,7 +565,7 @@ def remove_adapter_model(adapter_type, model_name):
 
 def create_combo(name, kind, models_list):
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=10)
         c = conn.cursor()
         new_id = str(uuid.uuid4())
         now_iso = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
@@ -581,7 +581,7 @@ def create_combo(name, kind, models_list):
 
 def delete_combo(combo_id):
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=10)
         c = conn.cursor()
         c.execute("SELECT name FROM combos WHERE id = ?", (combo_id,))
         row = c.fetchone()

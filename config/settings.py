@@ -1,6 +1,7 @@
 import os
 
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8962868813:AAHQ41Up7TFKSJMeLk4Ao1O6c-9SY9Wq6ho")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+ADMIN_USER_ID = os.getenv("ADMIN_USER_ID", "6526833205")
 BASE_URL = os.getenv("ROUTER_BASE_URL", "http://127.0.0.1:20128")
 DB_PATH = os.getenv("ROUTER_DB_PATH", os.path.expanduser("~/.9router/db/data.sqlite"))
 JWT_SECRET_PATH = os.getenv("ROUTER_JWT_PATH", os.path.expanduser("~/.9router/jwt-secret"))

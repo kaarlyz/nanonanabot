@@ -35,9 +35,15 @@ from core.keyboards import (
     get_combos_adapters_keyboard,
     get_back_button,
 )
-from config.settings import BASE_URL, BANNER_IMAGE_PATH
+from config.settings import BASE_URL, BANNER_IMAGE_PATH, ADMIN_USER_ID
 
 ADD_NAME, ADD_KEY, ADD_URL, ADD_OAUTH_CALLBACK = range(4)
+
+def is_authorized(user_id):
+    if not ADMIN_USER_ID:
+        return True
+    return str(user_id) == str(ADMIN_USER_ID)
+
 
 async def send_or_edit_banner(target_msg, text, reply_markup, chat_id=None, bot=None):
     # Telegram photo caption length limit is 1024 characters
@@ -81,6 +87,11 @@ async def send_or_edit_banner(target_msg, text, reply_markup, chat_id=None, bot=
         await target_msg.reply_html(text=text, reply_markup=reply_markup)
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id if update.effective_user else None
+    if not is_authorized(user_id):
+        if update.message:
+            await update.message.reply_text("⛔ Akses ditolak. Bot ini diproteksi khusus untuk admin.")
+        return
     period = context.user_data.get("period", "today")
     data = fetch_9router_stats(period)
     text = format_quota_report(data)
@@ -93,6 +104,10 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def button_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    user_id = query.from_user.id if query.from_user else None
+    if not is_authorized(user_id):
+        await query.answer("⛔ Akses ditolak. Hanya admin yang diizinkan.", show_alert=True)
+        return
     await query.answer()
     
     cur_period = context.user_data.get("period", "today")
