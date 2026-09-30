@@ -596,3 +596,30 @@ def delete_combo(combo_id):
     except Exception as e:
         return False, str(e)
 
+
+
+def check_router_service_health():
+    token = get_auth_token()
+    cookies = {"auth_token": token}
+    try:
+        r = requests.get(f"{BASE_URL}/api/health", cookies=cookies, timeout=3)
+        if r.status_code == 200 and r.json().get("ok") is True:
+            return True, "🟢 Online (Healthy)"
+        return False, f"🟡 Response: {r.status_code}"
+    except requests.exceptions.ConnectionError:
+        return False, "🔴 Offline (Service Down)"
+    except Exception as e:
+        return False, f"⚠️ Error: {str(e)[:30]}"
+
+def get_cooldown_accounts_count():
+    token = get_auth_token()
+    cookies = {"auth_token": token}
+    try:
+        r = requests.post(f"{BASE_URL}/api/providers/test-batch", json={"mode": "all"}, cookies=cookies, timeout=20)
+        if r.status_code == 200:
+            results = r.json().get("results", [])
+            cooldowns = [x for x in results if not (x.get("valid") is True or x.get("status") == "success" or x.get("success") is True)]
+            return len(results), len(cooldowns), cooldowns
+    except Exception:
+        pass
+    return 0, 0, []
